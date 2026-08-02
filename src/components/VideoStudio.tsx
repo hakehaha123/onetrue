@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import { LangSwitch, useI18n } from '@/lib/i18n/I18nProvider';
 import { GenerationProgressBar } from '@/components/GenerationProgressBar';
 import { UserBar } from '@/components/AuthWidgets';
+import { useGenerationPoll } from '@/hooks/useGenerationPoll';
 
 type GenState = 'idle' | 'submitting' | 'running' | 'done' | 'error';
 
@@ -17,6 +18,7 @@ const RESOLUTIONS = [
 
 const DURATIONS = [5, 8, 10] as const;
 const FPS_OPTIONS = [16, 24] as const;
+const JOB_SCOPE = 'ltx-txt2vid';
 
 /** LTX frame rule 8n+1 */
 function framesFor(durationSec: number, fps: number): number {
@@ -55,7 +57,6 @@ export function VideoStudio() {
   const [progressExact, setProgressExact] = useState(false);
   const [progressLabel, setProgressLabel] = useState('');
   const [pending, startTransition] = useTransition();
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startedAtRef = useRef<number>(0);
   const etaSecRef = useRef<number>(600);
   const endpointKeyRef = useRef('video_24');
@@ -97,6 +98,53 @@ export function VideoStudio() {
     }
   }, [gpuTier, frames, fps, res.width, res.height, durationSec]);
 
+  function downloadVideo(url: string, id: string) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `fvs-video-${id || 'out'}.mp4`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setDownloadNote(t.downloadDone);
+  }
+
+  const { startPoll, resumeFromStorage } = useGenerationPoll({
+    scope: JOB_SCOPE,
+    kind: 'video',
+    intervalMs: 2500,
+    labels: {
+      queued: t.progressQueued,
+      running: t.progressRunningVideo,
+      done: t.progressDone,
+      generating: t.generating,
+    },
+    getEndpointKey: () => endpointKeyRef.current || 'video_24',
+    getStartedAt: () => startedAtRef.current || Date.now(),
+    getEtaSec: () => etaSecRef.current || 600,
+    onTick: ({ status, percent, exact, label }) => {
+      setStatusText(status);
+      if (percent > 0 || exact) setProgressPct(percent);
+      setProgressExact(exact);
+      setProgressLabel(label);
+    },
+    onRunning: () => setState('running'),
+    onCompleted: (data, id) => {
+      setProgressPct(100);
+      setProgressExact(true);
+      setProgressLabel(t.progressDone);
+      const url = data.video_url || data.image_url || null;
+      setVideoUrl(url);
+      setState(url ? 'done' : 'error');
+      if (!url) setError('no video in output');
+      else downloadVideo(url, id);
+      refreshWallet().catch(() => undefined);
+    },
+    onFailed: (err) => {
+      setState('error');
+      setError(err);
+    },
+  });
+
   useEffect(() => {
     refreshWallet().catch(() => undefined);
   }, [refreshWallet]);
@@ -109,89 +157,23 @@ export function VideoStudio() {
     if (etaSec != null && etaSec > 0) etaSecRef.current = etaSec;
   }, [etaSec]);
 
+  // Resume polling after refresh if a job was still running.
   useEffect(() => {
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
+    const saved = resumeFromStorage();
+    if (!saved) return;
+    setJobId(saved.jobId);
+    setEndpointKey(saved.endpointKey);
+    endpointKeyRef.current = saved.endpointKey;
+    startedAtRef.current = saved.startedAt;
+    etaSecRef.current = saved.etaSec || 600;
+    setEtaSec(saved.etaSec || 600);
+    setState('running');
+    setStatusText('…');
+    setProgressPct(12);
+    setProgressExact(false);
+    setProgressLabel(t.progressQueued);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- resume once on mount
   }, []);
-
-  function stopPoll() {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-  }
-
-  function downloadVideo(url: string, id: string) {
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `fvs-video-${id || 'out'}.mp4`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setDownloadNote(t.downloadDone);
-  }
-
-  function progressLabelFor(status: string, stage?: string) {
-    const s = (status || '').toUpperCase();
-    if (s === 'IN_QUEUE' || stage === 'queued') return t.progressQueued;
-    if (s === 'IN_PROGRESS' || stage === 'running') return t.progressRunningVideo;
-    if (s === 'COMPLETED' || stage === 'done') return t.progressDone;
-    return t.generating;
-  }
-
-  function startPoll(id: string) {
-    stopPoll();
-    pollRef.current = setInterval(async () => {
-      try {
-        const qs = new URLSearchParams({
-          job_id: id,
-          endpoint_key: endpointKeyRef.current || 'video_24',
-          kind: 'video',
-          started_at: String(startedAtRef.current || Date.now()),
-          eta_sec: String(etaSecRef.current || 600),
-        });
-        const res = await fetch(`/api/generate/status?${qs.toString()}`);
-        const data = (await res.json()) as {
-          status?: string;
-          video_url?: string | null;
-          image_url?: string | null;
-          error?: string | null;
-          progress?: { percent?: number; exact?: boolean; stage?: string };
-        };
-        if (!res.ok) throw new Error(data.error || 'status failed');
-
-        setStatusText(data.status || '…');
-        const pct = Number(data.progress?.percent ?? 0);
-        setProgressPct(pct);
-        setProgressExact(Boolean(data.progress?.exact));
-        setProgressLabel(progressLabelFor(data.status || '', data.progress?.stage));
-
-        if (data.status === 'COMPLETED') {
-          stopPoll();
-          setProgressPct(100);
-          setProgressExact(true);
-          setProgressLabel(t.progressDone);
-          const url = data.video_url || data.image_url || null;
-          setVideoUrl(url);
-          setState(url ? 'done' : 'error');
-          if (!url) setError('no video in output');
-          else downloadVideo(url, id);
-          refreshWallet().catch(() => undefined);
-        } else if (data.status === 'FAILED') {
-          stopPoll();
-          setState('error');
-          setError(data.error || 'failed');
-        } else {
-          setState('running');
-        }
-      } catch (e) {
-        stopPoll();
-        setState('error');
-        setError(e instanceof Error ? e.message : 'poll failed');
-      }
-    }, 2500);
-  }
 
   async function onTranslate() {
     setError(null);

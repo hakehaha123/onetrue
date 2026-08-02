@@ -65,6 +65,36 @@ export function buildLtxTxt2VidWorkflow(params: LtxTxt2VidParams): Record<string
   if (workflow['4814']) workflow['4814'].inputs.noise_seed = seed;
   if (workflow['4832']) workflow['4832'].inputs.noise_seed = seed + 1;
 
+  // ResizeImageMaskNode uses ComfyUI DynamicCombo — subfields must be dotted keys.
+  if (workflow['4981']) {
+    const n = workflow['4981'].inputs;
+    n.scale_method = n.scale_method ?? 'lanczos';
+    n.resize_type = n.resize_type ?? 'scale longer dimension';
+    const longer =
+      n['resize_type.longer_size'] ?? n.longer_size ?? n.largest_side ?? 1536;
+    n['resize_type.longer_size'] = longer;
+    delete n.longer_size;
+    delete n.largest_side;
+  }
+
+  // Align LTXVTiledVAEDecode to current ComfyUI-LTXVideo INPUT_TYPES
+  for (const id of ['4982', '4983'] as const) {
+    const n = workflow[id]?.inputs;
+    if (!n) continue;
+    if (n.horizontal != null && n.horizontal_tiles == null) n.horizontal_tiles = n.horizontal;
+    if (n.vertical != null && n.vertical_tiles == null) n.vertical_tiles = n.vertical;
+    n.horizontal_tiles = n.horizontal_tiles ?? 2;
+    n.vertical_tiles = n.vertical_tiles ?? 2;
+    n.overlap = n.overlap ?? 1;
+    n.last_frame_fix = n.last_frame_fix ?? false;
+    delete n.horizontal;
+    delete n.vertical;
+    delete n.frames;
+    delete n.cpu_vae;
+    delete n.temporal_mode;
+    delete n.spatial_mode;
+  }
+
   return workflow;
 }
 

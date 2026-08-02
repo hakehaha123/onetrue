@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import { LangSwitch, useI18n } from '@/lib/i18n/I18nProvider';
 import { GenerationProgressBar } from '@/components/GenerationProgressBar';
 import { UserBar } from '@/components/AuthWidgets';
+import { useGenerationPoll } from '@/hooks/useGenerationPoll';
 
 type GenState = 'idle' | 'submitting' | 'running' | 'done' | 'error';
 
@@ -14,6 +15,8 @@ const SIZES = [
   { label: '4:3', width: 1024, height: 768 },
   { label: '9:16', width: 768, height: 1344 },
 ] as const;
+
+const JOB_SCOPE = 'flux-txt2img';
 
 export function Txt2ImgStudio() {
   const { t } = useI18n();
@@ -38,9 +41,9 @@ export function Txt2ImgStudio() {
   const [progressExact, setProgressExact] = useState(false);
   const [progressLabel, setProgressLabel] = useState('');
   const [pending, startTransition] = useTransition();
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startedAtRef = useRef<number>(0);
   const etaSecRef = useRef<number>(120);
+  const endpointKeyRef = useRef('image_24');
 
   const refreshWallet = useCallback(async () => {
     const res = await fetch('/api/wallet');
@@ -58,6 +61,54 @@ export function Txt2ImgStudio() {
     setEtaSec(Number(data.t_bill_est_sec));
   }, [steps]);
 
+  function downloadImage(url: string, id: string) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `fvs-${id || 'out'}.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setDownloadNote(t.downloadDone);
+  }
+
+  const { startPoll, resumeFromStorage } = useGenerationPoll({
+    scope: JOB_SCOPE,
+    kind: 'image',
+    intervalMs: 2000,
+    labels: {
+      queued: t.progressQueued,
+      running: t.progressRunning,
+      done: t.progressDone,
+      generating: t.generating,
+    },
+    getEndpointKey: () => endpointKeyRef.current || 'image_24',
+    getStartedAt: () => startedAtRef.current || Date.now(),
+    getEtaSec: () => etaSecRef.current || 120,
+    onTick: ({ status, percent, exact, label }) => {
+      setStatusText(status);
+      if (percent > 0 || exact) setProgressPct(percent);
+      setProgressExact(exact);
+      setProgressLabel(label);
+    },
+    onRunning: () => setState('running'),
+    onCompleted: (data, id) => {
+      setProgressPct(100);
+      setProgressExact(true);
+      setProgressLabel(t.progressDone);
+      const url = data.image_url || null;
+      setImageUrl(url);
+      setStorage(data.storage || (data.ephemeral ? 'ephemeral' : null));
+      setState(url ? 'done' : 'error');
+      if (!url) setError('no image in output');
+      else downloadImage(url, id);
+      refreshWallet().catch(() => undefined);
+    },
+    onFailed: (err) => {
+      setState('error');
+      setError(err);
+    },
+  });
+
   useEffect(() => {
     refreshWallet().catch(() => undefined);
   }, [refreshWallet]);
@@ -71,91 +122,20 @@ export function Txt2ImgStudio() {
   }, [etaSec]);
 
   useEffect(() => {
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
+    const saved = resumeFromStorage();
+    if (!saved) return;
+    setJobId(saved.jobId);
+    endpointKeyRef.current = saved.endpointKey || 'image_24';
+    startedAtRef.current = saved.startedAt;
+    etaSecRef.current = saved.etaSec || 120;
+    setEtaSec(saved.etaSec || 120);
+    setState('running');
+    setStatusText('…');
+    setProgressPct(12);
+    setProgressExact(false);
+    setProgressLabel(t.progressQueued);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- resume once on mount
   }, []);
-
-  function stopPoll() {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-  }
-
-  function downloadImage(url: string, id: string) {
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `fvs-${id || 'out'}.png`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setDownloadNote(t.downloadDone);
-  }
-
-  function progressLabelFor(status: string, stage?: string) {
-    const s = (status || '').toUpperCase();
-    if (s === 'IN_QUEUE' || stage === 'queued') return t.progressQueued;
-    if (s === 'IN_PROGRESS' || stage === 'running') return t.progressRunning;
-    if (s === 'COMPLETED' || stage === 'done') return t.progressDone;
-    return t.generating;
-  }
-
-  function startPoll(id: string) {
-    stopPoll();
-    pollRef.current = setInterval(async () => {
-      try {
-        const qs = new URLSearchParams({
-          job_id: id,
-          endpoint_key: 'image_24',
-          started_at: String(startedAtRef.current || Date.now()),
-          eta_sec: String(etaSecRef.current || 120),
-        });
-        const res = await fetch(`/api/generate/status?${qs.toString()}`);
-        const data = (await res.json()) as {
-          status?: string;
-          image_url?: string | null;
-          storage?: string | null;
-          ephemeral?: boolean;
-          error?: string | null;
-          progress?: { percent?: number; exact?: boolean; stage?: string; detail?: string };
-        };
-        if (!res.ok) throw new Error(data.error || 'status failed');
-
-        setStatusText(data.status || '…');
-        const pct = Number(data.progress?.percent ?? 0);
-        setProgressPct(pct);
-        setProgressExact(Boolean(data.progress?.exact));
-        setProgressLabel(progressLabelFor(data.status || '', data.progress?.stage));
-
-        if (data.status === 'COMPLETED') {
-          stopPoll();
-          setProgressPct(100);
-          setProgressExact(true);
-          setProgressLabel(t.progressDone);
-          const url = data.image_url || null;
-          setImageUrl(url);
-          setStorage(data.storage || (data.ephemeral ? 'ephemeral' : null));
-          setState(url ? 'done' : 'error');
-          if (!url) setError('no image in output');
-          else {
-            downloadImage(url, id);
-          }
-          refreshWallet().catch(() => undefined);
-        } else if (data.status === 'FAILED') {
-          stopPoll();
-          setState('error');
-          setError(data.error || 'failed');
-        } else {
-          setState('running');
-        }
-      } catch (e) {
-        stopPoll();
-        setState('error');
-        setError(e instanceof Error ? e.message : 'poll failed');
-      }
-    }, 2000);
-  }
 
   async function onTranslate() {
     setError(null);
@@ -234,6 +214,7 @@ export function Txt2ImgStudio() {
         await refreshWallet();
         setJobId(data.job_id);
         startedAtRef.current = Date.now();
+        endpointKeyRef.current = 'image_24';
         setProgressPct(8);
         setProgressLabel(t.progressQueued);
         setState('running');
