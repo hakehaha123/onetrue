@@ -4,13 +4,14 @@ import Link from 'next/link';
 import { useEffect, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { LangSwitch, useI18n } from '@/lib/i18n/I18nProvider';
-import { DevLoginForm, WeChatLoginButton } from '@/components/AuthWidgets';
+import { DevLoginForm, GoogleLoginButton, WeChatLoginButton } from '@/components/AuthWidgets';
 
 function LoginInner() {
   const { t } = useI18n();
   const sp = useSearchParams();
   const err = sp.get('error');
   const [wechatReady, setWechatReady] = useState(false);
+  const [googleReady, setGoogleReady] = useState(false);
   const [devReady, setDevReady] = useState(false);
 
   useEffect(() => {
@@ -18,6 +19,7 @@ function LoginInner() {
       .then((r) => r.json())
       .then((p: Record<string, { id?: string }>) => {
         setWechatReady(Boolean(p.wechat));
+        setGoogleReady(Boolean(p.google));
         setDevReady(Boolean(p.dev));
       })
       .catch(() => undefined);
@@ -36,7 +38,9 @@ function LoginInner() {
       </header>
 
       <section className="box">
-        {wechatReady ? <WeChatLoginButton /> : <p className="hint">{t.loginWechatPending}</p>}
+        {wechatReady ? <WeChatLoginButton /> : null}
+        {googleReady ? <GoogleLoginButton /> : null}
+        {!wechatReady && !googleReady ? <p className="hint">{t.loginWechatPending}</p> : null}
         {devReady ? <DevLoginForm /> : null}
         {err ? <p className="err">{err}</p> : null}
       </section>

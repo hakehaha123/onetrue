@@ -2,10 +2,11 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
-import { LangSwitch, useI18n } from '@/lib/i18n/I18nProvider';
+import { useSession } from 'next-auth/react';
+import { useI18n } from '@/lib/i18n/I18nProvider';
 import { GenerationProgressBar } from '@/components/GenerationProgressBar';
-import { UserBar } from '@/components/AuthWidgets';
 import { useGenerationPoll } from '@/hooks/useGenerationPoll';
+import { showPricingBreakdown } from '@/lib/pricing-ui';
 
 type GenState = 'idle' | 'submitting' | 'running' | 'done' | 'error';
 
@@ -22,6 +23,9 @@ const JOB_SCOPE = 'ltx-txt2vid';
 
 const DEFAULT_VIDEO_PROMPT =
   'Cinematic close-up shot of a breathtakingly beautiful female angel with soft luminous skin, glowing golden-white wings, and a serene smile. She wears a delicate ethereal white gown with golden embroidery, floating gently above soft clouds in golden hour sunlight. She looks directly into the camera, warmly waving her hand and speaking friendly greetings in a clear, sweet tone. Cinematic lighting, photorealistic, 8k resolution, ultra-detailed features, smooth animation.';
+
+const DEMO_VIDEO_URL =
+  'https://pub-38aba3cae8ff4b60ab5825a0c87ddccd.r2.dev/videos/ltx2.3-video.mp4';
 
 /** LTX frame rule 8n+1 */
 function framesFor(durationSec: number, fps: number): number {
@@ -40,6 +44,8 @@ function formatElapsed(sec: number): string {
 
 export function VideoStudio() {
   const { t } = useI18n();
+  const { data: session } = useSession();
+  const showCalc = showPricingBreakdown(session?.user?.role === 'admin');
   const [prompt, setPrompt] = useState(DEFAULT_VIDEO_PROMPT);
   const [promptEn, setPromptEn] = useState<string | null>(null);
   const [translating, setTranslating] = useState(false);
@@ -50,6 +56,7 @@ export function VideoStudio() {
   const [state, setState] = useState<GenState>('idle');
   const [statusText, setStatusText] = useState('');
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [isDemo, setIsDemo] = useState(true);
   const [downloadNote, setDownloadNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -144,6 +151,7 @@ export function VideoStudio() {
       setProgressLabel(t.progressDone);
       const url = data.video_url || data.image_url || null;
       setVideoUrl(url);
+      setIsDemo(false);
       setState(url ? 'done' : 'error');
       if (!url) setError('no video in output');
       else downloadVideo(url, id);
@@ -224,7 +232,6 @@ export function VideoStudio() {
 
   function onGenerate() {
     setError(null);
-    setVideoUrl(null);
     setDownloadNote(null);
     setJobId(null);
     setProgressPct(3);
@@ -311,64 +318,50 @@ export function VideoStudio() {
 
   const busy = state === 'submitting' || state === 'running' || pending;
   const etaMin = etaSec != null ? Math.max(1, Math.round(etaSec / 60)) : null;
+  const displayVideo = videoUrl || DEMO_VIDEO_URL;
 
   return (
     <div className="studio">
-      <header className="hero">
-        <div className="hero-row">
-          <p className="brand">{t.brand}</p>
-          <div className="actions">
-            <UserBar />
-            <LangSwitch />
-            <Link href="/" className="ghost">
-              {t.txt2img}
-            </Link>
-            <Link href="/credits" className="wallet">
-              {t.balance} {balance == null ? '…' : `${balance}`}
-              <span>{t.recharge}</span>
-            </Link>
-          </div>
-        </div>
+      <div className="page-head">
         <h1>{t.txt2vid}</h1>
         <p className="lede">{t.videoLede}</p>
-      </header>
+      </div>
 
       <section className="stage">
-        <div className="canvas" aria-live="polite">
-          {videoUrl ? (
-            <>
-              <video className="result" src={videoUrl} controls playsInline autoPlay loop />
-              <div className="canvas-bar">
-                <span>{t.videoDownloadHint}</span>
-                <button
-                  type="button"
-                  className="dl"
-                  onClick={() => videoUrl && downloadVideo(videoUrl, jobId || 'out')}
-                >
-                  {t.download}
-                </button>
-              </div>
-              {downloadNote && <p className="dl-note">{downloadNote}</p>}
-            </>
-          ) : (
-            <div className={`placeholder ${busy ? 'pulse' : ''}`}>
-              <div className="ph-inner">
-                <span>{busy ? statusText || t.generating : t.videoPlaceholder}</span>
-                <GenerationProgressBar
-                  visible={busy}
-                  percent={progressPct}
-                  exact={progressExact}
-                  label={progressLabel || t.generating}
-                />
-                {busy && (
-                  <p className="eta-hint">
-                    已用时 {formatElapsed(elapsedSec)}
-                    {etaMin != null ? ` · ${t.videoEtaHint.replace('{min}', String(etaMin))}` : ''}
-                  </p>
-                )}
-              </div>
+        <div className={`canvas ${busy ? 'busy' : ''}`} aria-live="polite">
+          <video
+            className="result"
+            src={displayVideo}
+            controls
+            playsInline
+            autoPlay={isDemo || state === 'done'}
+            loop={isDemo}
+            muted={isDemo}
+          />
+          {busy ? (
+            <div className="canvas-overlay">
+              <span>{statusText || t.generating}</span>
+              <GenerationProgressBar
+                visible
+                percent={progressPct}
+                exact={progressExact}
+                label={progressLabel || t.generating}
+              />
+              <p className="eta-hint">
+                已用时 {formatElapsed(elapsedSec)}
+                {etaMin != null ? ` · ${t.videoEtaHint.replace('{min}', String(etaMin))}` : ''}
+              </p>
             </div>
-          )}
+          ) : null}
+          <div className="canvas-bar">
+            <span>{isDemo ? t.demoSample : t.videoDownloadHint}</span>
+            {!isDemo && videoUrl ? (
+              <button type="button" className="dl" onClick={() => downloadVideo(videoUrl, jobId || 'out')}>
+                {t.download}
+              </button>
+            ) : null}
+          </div>
+          {downloadNote && <p className="dl-note">{downloadNote}</p>}
           {(state === 'done' || state === 'error') && elapsedSec > 0 && (
             <p className="eta-hint elapsed-final">本次任务用时 {formatElapsed(elapsedSec)}</p>
           )}
@@ -492,11 +485,17 @@ export function VideoStudio() {
               </strong>
             </div>
             <p>
-              {gpuTier === '48gb' ? t.rateNote48 : t.rateNote} $
-              {rateHr?.toFixed(2) ?? (gpuTier === '48gb' ? '1.22' : '0.69')}/hr
-              {etaSec != null ? ` · ${t.coldNote} ~${etaMin} ${t.minutes}` : ''}
-              {' · '}
-              {t.videoColdNote}
+              {showCalc ? (
+                <>
+                  {gpuTier === '48gb' ? t.rateNote48 : t.rateNote} $
+                  {rateHr?.toFixed(2) ?? (gpuTier === '48gb' ? '1.22' : '0.69')}/hr
+                  {etaSec != null ? ` · ${t.coldNote} ~${etaMin} ${t.minutes}` : ''}
+                  {' · '}
+                  {t.videoColdNote}
+                </>
+              ) : etaMin != null ? (
+                t.videoEtaHint.replace('{min}', String(etaMin))
+              ) : null}
             </p>
           </div>
 
@@ -531,72 +530,28 @@ export function VideoStudio() {
 
       <style jsx>{`
         .studio {
-          min-height: 100vh;
-          padding: clamp(1.25rem, 4vw, 3rem);
-          background:
-            radial-gradient(1200px 600px at 10% -10%, #1a2e3d55, transparent 55%),
-            radial-gradient(900px 500px at 100% 0%, #3d241a55, transparent 50%),
-            linear-gradient(165deg, #0a0c0e 0%, #12161a 45%, #1a1410 100%);
-          color: #f3ebe1;
-        }
-        .hero {
-          max-width: 1100px;
-          margin: 0 auto 2rem;
-        }
-        .hero-row {
-          display: flex;
-          justify-content: space-between;
-          gap: 1rem;
-          align-items: flex-start;
-          flex-wrap: wrap;
-        }
-        .actions {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 0.5rem;
-          align-items: center;
-        }
-        .brand {
-          margin: 0;
-          font-family: var(--font-display);
-          font-size: clamp(1.8rem, 4vw, 2.6rem);
-        }
-        h1 {
-          margin: 0.6rem 0 0.35rem;
-          font-family: var(--font-display);
-          font-weight: 500;
-          font-size: clamp(1.5rem, 3vw, 2rem);
-        }
-        .lede {
-          margin: 0;
-          color: #c9bdae;
-          max-width: 40rem;
-          line-height: 1.5;
-        }
-        .ghost {
-          color: #d7cdc1;
-          text-decoration: none;
-          border: 1px solid #ffffff22;
-          padding: 0.4rem 0.65rem;
-          font-size: 0.85rem;
-        }
-        .wallet {
-          display: inline-flex;
-          align-items: center;
-          gap: 0.55rem;
-          color: #e8dcc8;
-          text-decoration: none;
-          border: 1px solid #ffffff22;
-          padding: 0.4rem 0.65rem;
-          font-size: 0.85rem;
-        }
-        .wallet span {
-          opacity: 0.75;
-          font-size: 0.78rem;
-        }
-        .stage {
           max-width: 1100px;
           margin: 0 auto;
+          color: #f3ebe1;
+        }
+        .page-head {
+          margin-bottom: 1.15rem;
+        }
+        h1 {
+          margin: 0;
+          font-family: var(--font-display);
+          font-weight: 400;
+          font-size: clamp(1.45rem, 2.4vw, 1.9rem);
+          color: #f3ebe1;
+        }
+        .lede {
+          margin: 0.4rem 0 0;
+          color: #9a948a;
+          font-size: 0.9rem;
+          max-width: 42rem;
+          line-height: 1.5;
+        }
+        .stage {
           display: grid;
           grid-template-columns: 1.15fr 0.85fr;
           gap: 1.25rem;
@@ -613,15 +568,33 @@ export function VideoStudio() {
           border: 1px solid #ffffff14;
           position: relative;
           overflow: hidden;
+          border-radius: 10px;
         }
         .result {
           display: block;
           width: 100%;
           max-height: 70vh;
+          min-height: 360px;
           object-fit: contain;
           background: #000;
         }
+        .canvas-overlay {
+          position: absolute;
+          inset: 0;
+          display: flex;
+          flex-direction: column;
+          align-items: stretch;
+          justify-content: center;
+          gap: 0.75rem;
+          padding: 1.5rem;
+          background: #0a0a0acc;
+          text-align: center;
+        }
         .canvas-bar {
+          position: absolute;
+          left: 0;
+          right: 0;
+          bottom: 0;
           display: flex;
           justify-content: space-between;
           gap: 0.75rem;
@@ -629,7 +602,7 @@ export function VideoStudio() {
           padding: 0.65rem 0.85rem;
           font-size: 0.8rem;
           color: #cfc3b4;
-          border-top: 1px solid #ffffff12;
+          background: #00000088;
         }
         .dl {
           border: 1px solid #ffffff33;
@@ -644,32 +617,17 @@ export function VideoStudio() {
           font-size: 0.78rem;
           color: #9ecb9a;
         }
-        .placeholder {
-          min-height: 360px;
-          display: grid;
-          place-items: center;
-          padding: 2rem;
-        }
-        .placeholder.pulse .ph-inner {
-          animation: pulse 1.8s ease-in-out infinite;
-        }
-        .ph-inner {
-          width: min(100%, 420px);
-          text-align: center;
-          color: #b8aea0;
-          display: flex;
-          flex-direction: column;
-          gap: 0.85rem;
-        }
         .eta-hint {
           margin: 0;
           font-size: 0.8rem;
           color: #8fa8b8;
         }
         .elapsed-final {
-          margin: 0.5rem 0 0;
+          margin: 0;
+          padding: 0.35rem 0.75rem 2.75rem;
           text-align: center;
           color: #c4b8a8;
+          font-size: 0.8rem;
         }
         @keyframes pulse {
           0%,
@@ -784,10 +742,13 @@ export function VideoStudio() {
           margin-top: 0.2rem;
           font-size: 1.05rem;
           font-weight: 600;
+          color: #f2efe8;
+          background: none;
+          -webkit-text-fill-color: #f2efe8;
         }
         .cost p {
           margin: 0.35rem 0 0;
-          color: #9a8f82;
+          color: #a8a29a;
           font-size: 0.75rem;
           line-height: 1.4;
         }

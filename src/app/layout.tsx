@@ -14,8 +14,8 @@ const body = Manrope({
 });
 
 export const metadata: Metadata = {
-  title: 'OneTrue AI',
-  description: 'Flux text-to-image on RunPod Serverless',
+  title: '缘初 AI',
+  description: '文生图 · 文生视频',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

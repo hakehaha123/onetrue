@@ -2,11 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/auth';
 import { CREDIT_PACKAGES } from '@/lib/credits';
 import { createRechargeOrder, listUserRecharges } from '@/lib/recharge';
+import { stripeEnabled } from '@/lib/stripe';
 
 export async function GET() {
   try {
     const user = await requireUser();
     const orders = await listUserRecharges(user.id);
+    const stripeOn = stripeEnabled();
     return NextResponse.json({
       packages: CREDIT_PACKAGES.map((p) => ({
         ...p,
@@ -15,7 +17,8 @@ export async function GET() {
       })),
       orders,
       pay: {
-        mode: 'manual_qr',
+        mode: stripeOn ? 'stripe_and_manual_qr' : 'manual_qr',
+        stripe: stripeOn,
         wechat_qr: process.env.PAY_QR_WECHAT_URL || null,
         alipay_qr: process.env.PAY_QR_ALIPAY_URL || null,
         note: '转账时请填写备注码；提交「我已支付」后由管理员确认入账（通常数小时内）。',

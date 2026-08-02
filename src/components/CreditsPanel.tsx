@@ -2,9 +2,9 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useState, useTransition } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useSession } from 'next-auth/react';
-import { LangSwitch, useI18n } from '@/lib/i18n/I18nProvider';
-import { UserBar } from '@/components/AuthWidgets';
+import { useI18n } from '@/lib/i18n/I18nProvider';
 
 type Package = {
   id: string;
@@ -56,11 +56,14 @@ function formatRemain(sec: number) {
 export function CreditsPanel() {
   const { t, locale } = useI18n();
   const { status: authStatus } = useSession();
+  const searchParams = useSearchParams();
   const [points, setPoints] = useState<number | null>(null);
   const [packages, setPackages] = useState<Package[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [wechatQr, setWechatQr] = useState<string | null>(null);
   const [alipayQr, setAlipayQr] = useState<string | null>(null);
+  const [stripeOn, setStripeOn] = useState(false);
+  const [payMode, setPayMode] = useState<'stripe' | 'qr'>('stripe');
   const [active, setActive] = useState<ActivePay | null>(null);
   const [channel, setChannel] = useState<'wechat' | 'alipay'>('wechat');
   const [msg, setMsg] = useState<string | null>(null);
@@ -87,6 +90,9 @@ export function CreditsPanel() {
     setOrders((p.data.orders || []) as Order[]);
     setWechatQr(p.data.pay?.wechat_qr || null);
     setAlipayQr(p.data.pay?.alipay_qr || null);
+    const stripe = Boolean(p.data.pay?.stripe);
+    setStripeOn(stripe);
+    if (!stripe) setPayMode('qr');
   }, []);
 
   useEffect(() => {
@@ -98,11 +104,30 @@ export function CreditsPanel() {
     refresh().catch((e) => setErr(e instanceof Error ? e.message : 'error'));
   }, [authStatus, refresh]);
 
+  useEffect(() => {
+    const stripe = searchParams.get('stripe');
+    if (stripe === 'success') setMsg(locale === 'zh' ? '支付成功，积分将很快到账' : 'Payment ok — credits will appear shortly');
+    if (stripe === 'cancel') setErr(locale === 'zh' ? '已取消 Stripe 支付' : 'Stripe checkout cancelled');
+  }, [searchParams, locale]);
+
   function createOrder(packageId: string) {
     setMsg(null);
     setErr(null);
     startTransition(async () => {
       try {
+        if (payMode === 'stripe' && stripeOn) {
+          const res = await fetch('/api/wallet/stripe/checkout', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ package_id: packageId }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'failed');
+          if (!data.url) throw new Error('missing checkout url');
+          setMsg(t.stripeRedirecting);
+          window.location.href = data.url as string;
+          return;
+        }
         const res = await fetch('/api/wallet/recharge', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -145,16 +170,6 @@ export function CreditsPanel() {
   return (
     <div className="page">
       <header className="top">
-        <div className="row">
-          <Link href="/" className="back">
-            {t.backTxt2img}
-          </Link>
-          <div className="right">
-            <UserBar />
-            <LangSwitch />
-          </div>
-        </div>
-        <p className="brand">{t.brand}</p>
         <h1>{t.creditsTitle}</h1>
         <p className="lede">{t.creditsLede}</p>
       </header>
@@ -174,22 +189,42 @@ export function CreditsPanel() {
 
           <section className="channel">
             <span>{t.payChannel}</span>
-            <div className="tabs">
-              <button
-                type="button"
-                className={channel === 'wechat' ? 'on' : ''}
-                onClick={() => setChannel('wechat')}
-              >
-                {t.channelWechat}
-              </button>
-              <button
-                type="button"
-                className={channel === 'alipay' ? 'on' : ''}
-                onClick={() => setChannel('alipay')}
-              >
-                {t.channelAlipay}
-              </button>
-            </div>
+            {stripeOn ? (
+              <div className="tabs">
+                <button
+                  type="button"
+                  className={payMode === 'stripe' ? 'on' : ''}
+                  onClick={() => setPayMode('stripe')}
+                >
+                  {t.payWithStripe}
+                </button>
+                <button
+                  type="button"
+                  className={payMode === 'qr' ? 'on' : ''}
+                  onClick={() => setPayMode('qr')}
+                >
+                  {t.payWithQr}
+                </button>
+              </div>
+            ) : null}
+            {payMode === 'qr' ? (
+              <div className="tabs sub">
+                <button
+                  type="button"
+                  className={channel === 'wechat' ? 'on' : ''}
+                  onClick={() => setChannel('wechat')}
+                >
+                  {t.channelWechat}
+                </button>
+                <button
+                  type="button"
+                  className={channel === 'alipay' ? 'on' : ''}
+                  onClick={() => setChannel('alipay')}
+                >
+                  {t.channelAlipay}
+                </button>
+              </div>
+            ) : null}
           </section>
 
           <section className="grid">
@@ -328,16 +363,16 @@ export function CreditsPanel() {
         }
         .balance strong {
           font-size: 1.5rem;
-          color: #c4a574;
+          color: #f2efe8;
         }
         .balance em {
-          color: #7a7268;
+          color: #a8a29a;
           font-style: normal;
           font-size: 0.85rem;
         }
         .channel {
           margin-bottom: 1rem;
-          color: #cbb9a4;
+          color: #d8d2c8;
           font-size: 0.9rem;
         }
         .tabs {
@@ -345,18 +380,21 @@ export function CreditsPanel() {
           gap: 0.4rem;
           margin-top: 0.4rem;
         }
+        .tabs.sub {
+          margin-top: 0.55rem;
+        }
         .tabs button {
           border: 1px solid #ffffff22;
           background: transparent;
-          color: #d7cdc1;
+          color: #e8e4dc;
           padding: 0.4rem 0.7rem;
           cursor: pointer;
           font: inherit;
         }
         .tabs button.on {
-          border-color: #c4a57499;
-          background: #c4a57422;
-          color: #c4a574;
+          border-color: #ffffff44;
+          background: #ffffff12;
+          color: #fff;
         }
         .grid {
           display: grid;

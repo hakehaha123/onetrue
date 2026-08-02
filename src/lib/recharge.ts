@@ -10,12 +10,13 @@ export type RechargeOrder = {
   points: number;
   amount_cents: number;
   remark_code: string;
-  channel: 'wechat' | 'alipay';
+  channel: 'wechat' | 'alipay' | 'stripe';
   status: string;
   expires_at: string;
   claimed_at: string | null;
   confirmed_at: string | null;
   created_at: string;
+  stripe_session_id?: string | null;
 };
 
 const REMARK_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -59,7 +60,7 @@ export async function countOpenOrders(userId: string): Promise<number> {
 export async function createRechargeOrder(input: {
   userId: string;
   packageId: string;
-  channel: 'wechat' | 'alipay';
+  channel: 'wechat' | 'alipay' | 'stripe';
 }): Promise<RechargeOrder> {
   const pkg = getCreditPackage(input.packageId);
   if (!pkg) throw new Error('invalid package');
@@ -210,6 +211,83 @@ export async function confirmRechargeOrders(input: {
     }
   }
   return { confirmed, failed };
+}
+
+/** Create Stripe Checkout pending order (does not credit until webhook). */
+export async function createStripeRechargeOrder(input: {
+  userId: string;
+  packageId: string;
+}): Promise<RechargeOrder> {
+  const db = getSql();
+  await db`
+    UPDATE recharge_orders
+    SET status = 'cancelled', updated_at = now()
+    WHERE user_id = ${input.userId}
+      AND channel = 'stripe'
+      AND status = 'pending_pay'
+  `;
+  return createRechargeOrder({
+    userId: input.userId,
+    packageId: input.packageId,
+    channel: 'stripe',
+  });
+}
+
+export async function attachStripeSession(orderId: string, sessionId: string): Promise<void> {
+  const db = getSql();
+  await db`
+    UPDATE recharge_orders
+    SET stripe_session_id = ${sessionId}, updated_at = now()
+    WHERE id = ${orderId}
+  `;
+}
+
+/** Idempotent credit after Stripe Checkout succeeds. */
+export async function confirmStripeRecharge(input: {
+  orderId: string;
+  sessionId: string;
+}): Promise<{ ok: true; already?: boolean } | { ok: false; reason: string }> {
+  const db = getSql();
+  const rows = await db`
+    SELECT id, user_id, package_id, points, amount_cents, remark_code, channel, status,
+           stripe_session_id
+    FROM recharge_orders WHERE id = ${input.orderId} LIMIT 1
+  `;
+  const order = rows[0] as
+    | (RechargeOrder & { stripe_session_id?: string | null })
+    | undefined;
+  if (!order) return { ok: false, reason: 'order_not_found' };
+  if (order.channel !== 'stripe') return { ok: false, reason: 'not_stripe' };
+  if (order.status === 'confirmed') return { ok: true, already: true };
+
+  const updated = await db`
+    UPDATE recharge_orders
+    SET status = 'confirmed',
+        confirmed_at = now(),
+        claimed_at = COALESCE(claimed_at, now()),
+        stripe_session_id = COALESCE(stripe_session_id, ${input.sessionId}),
+        updated_at = now()
+    WHERE id = ${input.orderId}
+      AND status IN ('pending_pay', 'claimed')
+    RETURNING id, user_id, package_id, points, remark_code
+  `;
+  const row = updated[0] as
+    | { id: string; user_id: string; package_id: string; points: number; remark_code: string }
+    | undefined;
+  if (!row) {
+    const again = await getRechargeOrder(input.orderId);
+    if (again?.status === 'confirmed') return { ok: true, already: true };
+    return { ok: false, reason: 'confirm_failed' };
+  }
+
+  await creditWallet({
+    userId: row.user_id,
+    points: Number(row.points),
+    packageId: row.package_id,
+    note: `stripe_${row.remark_code}`,
+    providerRef: `stripe_${input.sessionId}`,
+  });
+  return { ok: true };
 }
 
 export async function rejectRechargeOrder(input: {

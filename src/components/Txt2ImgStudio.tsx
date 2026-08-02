@@ -2,10 +2,11 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
-import { LangSwitch, useI18n } from '@/lib/i18n/I18nProvider';
+import { useSession } from 'next-auth/react';
+import { useI18n } from '@/lib/i18n/I18nProvider';
 import { GenerationProgressBar } from '@/components/GenerationProgressBar';
-import { UserBar } from '@/components/AuthWidgets';
 import { useGenerationPoll } from '@/hooks/useGenerationPoll';
+import { showPricingBreakdown } from '@/lib/pricing-ui';
 
 type GenState = 'idle' | 'submitting' | 'running' | 'done' | 'error';
 
@@ -18,6 +19,12 @@ const SIZES = [
 
 const JOB_SCOPE = 'flux-txt2img';
 
+const DEFAULT_IMAGE_PROMPT =
+  'A breathtakingly beautiful cinematic portrait of a serene female angel. She has large, majestic white feathered wings that softly glow at the edges, spreading elegantly behind her. She wears a flowing, ethereal gown made of translucent white silk and subtle golden embroidery. Her long, wavy golden hair cascades over her shoulders, and her eyes have a gentle, compassionate expression. She is standing on a pure white marble balcony overlooking a celestial city partially obscured by soft, fluffy cumulus clouds during the warm golden hour sunset. Volumetric lighting, god rays piercing through clouds, highly detailed skin texture with visible pores, shot on a 85mm f/1.4 lens, photorealistic 8K resolution, stunning depth of field.';
+
+const DEMO_IMAGE_URL =
+  'https://pub-38aba3cae8ff4b60ab5825a0c87ddccd.r2.dev/images/flux1-image.png';
+
 function formatElapsed(sec: number): string {
   const s = Math.max(0, Math.floor(sec));
   const m = Math.floor(s / 60);
@@ -28,7 +35,9 @@ function formatElapsed(sec: number): string {
 
 export function Txt2ImgStudio() {
   const { t } = useI18n();
-  const [prompt, setPrompt] = useState('时尚杂志大片，丝质连衣裙走秀，柔和日光，85mm，电影感色彩');
+  const { data: session } = useSession();
+  const showCalc = showPricingBreakdown(session?.user?.role === 'admin');
+  const [prompt, setPrompt] = useState(DEFAULT_IMAGE_PROMPT);
   const [promptEn, setPromptEn] = useState<string | null>(null);
   const [translating, setTranslating] = useState(false);
   const [sizeIdx, setSizeIdx] = useState(0);
@@ -36,6 +45,7 @@ export function Txt2ImgStudio() {
   const [state, setState] = useState<GenState>('idle');
   const [statusText, setStatusText] = useState('');
   const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [isDemo, setIsDemo] = useState(true);
   const [storage, setStorage] = useState<string | null>(null);
   const [downloadNote, setDownloadNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -106,6 +116,7 @@ export function Txt2ImgStudio() {
       setProgressLabel(t.progressDone);
       const url = data.image_url || null;
       setImageUrl(url);
+      setIsDemo(false);
       setStorage(data.storage || (data.ephemeral ? 'ephemeral' : null));
       setState(url ? 'done' : 'error');
       if (!url) setError('no image in output');
@@ -184,7 +195,6 @@ export function Txt2ImgStudio() {
 
   function onGenerate() {
     setError(null);
-    setImageUrl(null);
     setStorage(null);
     setDownloadNote(null);
     setJobId(null);
@@ -252,63 +262,46 @@ export function Txt2ImgStudio() {
   }
 
   const busy = state === 'submitting' || state === 'running' || pending;
+  const displayImage = imageUrl || DEMO_IMAGE_URL;
 
   return (
     <div className="studio">
-      <header className="hero">
-        <div className="hero-row">
-          <p className="brand">{t.brand}</p>
-          <div className="actions">
-            <UserBar />
-            <LangSwitch />
-            <Link href="/video" className="ghost">
-              {t.txt2vid}
-            </Link>
-            <Link href="/workflow" className="ghost">
-              {t.openWorkflow}
-            </Link>
-            <Link href="/credits" className="wallet">
-              {t.balance} {balance == null ? '…' : `${balance}`}
-              <span>{t.recharge}</span>
-            </Link>
-          </div>
-        </div>
+      <div className="page-head">
         <h1>{t.txt2img}</h1>
         <p className="lede">{t.lede}</p>
-      </header>
+      </div>
 
       <section className="stage">
-        <div className="canvas" aria-live="polite">
-          {imageUrl ? (
-            <>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={imageUrl} alt="result" className="result" />
-              <div className="canvas-bar">
-                <span>{storage === 'r2' ? t.savedToR2 : t.downloadHint}</span>
-                <button
-                  type="button"
-                  className="dl"
-                  onClick={() => imageUrl && downloadImage(imageUrl, jobId || 'out')}
-                >
-                  {t.download}
-                </button>
-              </div>
-              {downloadNote && <p className="dl-note">{downloadNote}</p>}
-            </>
-          ) : (
-            <div className={`placeholder ${busy ? 'pulse' : ''}`}>
-              <div className="ph-inner">
-                <span>{busy ? statusText || t.generating : t.placeholder}</span>
-                <GenerationProgressBar
-                  visible={busy}
-                  percent={progressPct}
-                  exact={progressExact}
-                  label={progressLabel || t.generating}
-                />
-                {busy && <p className="eta-hint">已用时 {formatElapsed(elapsedSec)}</p>}
-              </div>
+        <div className={`canvas ${busy ? 'busy' : ''}`} aria-live="polite">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={displayImage} alt={isDemo ? t.demoSample : 'result'} className="result" />
+          {busy ? (
+            <div className="canvas-overlay">
+              <span>{statusText || t.generating}</span>
+              <GenerationProgressBar
+                visible
+                percent={progressPct}
+                exact={progressExact}
+                label={progressLabel || t.generating}
+              />
+              <p className="eta-hint">已用时 {formatElapsed(elapsedSec)}</p>
             </div>
-          )}
+          ) : null}
+          <div className="canvas-bar">
+            <span>
+              {isDemo
+                ? t.demoSample
+                : storage === 'r2'
+                  ? t.savedToR2
+                  : t.downloadHint}
+            </span>
+            {!isDemo && imageUrl ? (
+              <button type="button" className="dl" onClick={() => downloadImage(imageUrl, jobId || 'out')}>
+                {t.download}
+              </button>
+            ) : null}
+          </div>
+          {downloadNote && <p className="dl-note">{downloadNote}</p>}
           {(state === 'done' || state === 'error') && elapsedSec > 0 && (
             <p className="eta-hint elapsed-final">本次任务用时 {formatElapsed(elapsedSec)}</p>
           )}
@@ -382,10 +375,16 @@ export function Txt2ImgStudio() {
               </strong>
             </div>
             <p>
-              {t.rateNote} ${rateHr?.toFixed(2) ?? '0.69'}/hr
-              {etaSec != null ? ` · ${t.coldNote} ${etaSec}s` : ''}
-              {' · '}
-              {t.multiplierNote}
+              {showCalc ? (
+                <>
+                  {t.rateNote} ${rateHr?.toFixed(2) ?? '0.69'}/hr
+                  {etaSec != null ? ` · ${t.coldNote} ${etaSec}s` : ''}
+                  {' · '}
+                  {t.multiplierNote}
+                </>
+              ) : etaSec != null ? (
+                t.etaOnly.replace('{sec}', String(etaSec))
+              ) : null}
             </p>
           </div>
 
@@ -411,74 +410,26 @@ export function Txt2ImgStudio() {
 
       <style jsx>{`
         .studio {
-          min-height: 100vh;
-          padding: clamp(1.25rem, 4vw, 3rem);
-          background:
-            radial-gradient(1200px 600px at 10% -10%, #3d2a1a55, transparent 55%),
-            radial-gradient(900px 500px at 100% 0%, #1a334455, transparent 50%),
-            linear-gradient(165deg, #0e0c0a 0%, #1a1612 45%, #121820 100%);
-          color: #f3ebe1;
-        }
-        .hero {
-          max-width: 1100px;
-          margin: 0 auto 2rem;
-        }
-        .hero-row {
-          display: flex;
-          justify-content: space-between;
-          gap: 1rem;
-          align-items: flex-start;
-          flex-wrap: wrap;
-        }
-        .actions {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 0.5rem;
-          align-items: center;
-        }
-        .brand {
-          margin: 0;
-          font-family: var(--font-display);
-          font-size: clamp(1.8rem, 4vw, 2.6rem);
-        }
-        .ghost {
-          color: #d7cdc1;
-          text-decoration: none;
-          border: 1px solid #ffffff22;
-          padding: 0.4rem 0.65rem;
-          font-size: 0.85rem;
-        }
-        .wallet {
-          display: inline-flex;
-          align-items: center;
-          gap: 0.55rem;
-          color: #e8dcc8;
-          text-decoration: none;
-          border: 1px solid #ffffff22;
-          padding: 0.4rem 0.65rem;
-          font-size: 0.85rem;
-        }
-        .wallet span {
-          color: #1a120a;
-          background: linear-gradient(120deg, #c4a574, #8f6b3e);
-          padding: 0.12rem 0.4rem;
-          font-size: 0.72rem;
-          font-weight: 600;
-        }
-        h1 {
-          margin: 0.35rem 0 0;
-          font-weight: 500;
-          font-size: 1.1rem;
-          color: #cbb9a4;
-        }
-        .lede {
-          margin: 0.45rem 0 0;
-          color: #8f8578;
-          font-size: 0.95rem;
-        }
-        .stage {
           max-width: 1100px;
           margin: 0 auto;
+          color: #f3ebe1;
+        }
+        .page-head {
+          margin-bottom: 1.15rem;
+        }
+        h1 {
+          margin: 0;
+          font-family: var(--font-display);
+          font-weight: 400;
+          font-size: clamp(1.45rem, 2.4vw, 1.9rem);
+          color: #f3ebe1;
+        }
+        .lede {
+          margin: 0.4rem 0 0;
+          color: #9a948a;
+          font-size: 0.9rem;
+        }
+        .stage {
           display: grid;
           grid-template-columns: 1.15fr 0.85fr;
           gap: 1.5rem;
@@ -493,12 +444,27 @@ export function Txt2ImgStudio() {
           border: 1px solid #ffffff14;
           background: #090807cc;
           position: relative;
+          overflow: hidden;
+          border-radius: 10px;
         }
         .result {
           width: 100%;
-          height: 100%;
+          height: min(70vh, 640px);
           object-fit: contain;
           display: block;
+          background: #050505;
+        }
+        .canvas-overlay {
+          position: absolute;
+          inset: 0;
+          display: flex;
+          flex-direction: column;
+          align-items: stretch;
+          justify-content: center;
+          gap: 0.75rem;
+          padding: 1.5rem;
+          background: #0a0a0acc;
+          text-align: center;
         }
         .canvas-bar {
           position: absolute;
@@ -530,33 +496,17 @@ export function Txt2ImgStudio() {
           color: #b7d4a8;
           background: #00000066;
         }
-        .placeholder {
-          min-height: min(70vh, 640px);
-          display: grid;
-          place-items: center;
-          color: #6e655c;
-          padding: 1.5rem;
-        }
-        .ph-inner {
-          width: min(420px, 100%);
-          display: flex;
-          flex-direction: column;
-          gap: 0.75rem;
-          align-items: stretch;
-          text-align: center;
-        }
-        .placeholder.pulse > .ph-inner > span {
-          animation: pulse 1.4s ease-in-out infinite;
-        }
         .eta-hint {
           margin: 0;
           font-size: 0.8rem;
           color: #8fa8b8;
         }
         .elapsed-final {
-          margin: 0.5rem 0 0;
+          margin: 0;
+          padding: 0.35rem 0.75rem 2.5rem;
           text-align: center;
           color: #c4b8a8;
+          font-size: 0.8rem;
         }
         .panel {
           display: flex;
@@ -666,16 +616,20 @@ export function Txt2ImgStudio() {
           font-size: 0.75rem;
           letter-spacing: 0.06em;
           text-transform: uppercase;
-          color: #9a8f82;
+          color: #b8b2a8;
           margin-bottom: 0.25rem;
         }
         .cost strong {
           font-size: 1.15rem;
+          color: #f2efe8;
+          font-weight: 600;
+          background: none;
+          -webkit-text-fill-color: #f2efe8;
         }
         .cost p {
           margin: 0.45rem 0 0;
           font-size: 0.78rem;
-          color: #7a7268;
+          color: #a8a29a;
         }
         .cta {
           border: 0;
@@ -692,7 +646,7 @@ export function Txt2ImgStudio() {
         .meta {
           margin: 0;
           font-size: 0.75rem;
-          color: #7a7268;
+          color: #a8a29a;
           word-break: break-all;
         }
         .err {

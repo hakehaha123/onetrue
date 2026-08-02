@@ -102,6 +102,31 @@ export function WeChatLoginButton() {
   );
 }
 
+export function GoogleLoginButton() {
+  const { t } = useI18n();
+  return (
+    <button type="button" className="gg" onClick={() => signIn('google', { callbackUrl: '/' })}>
+      {t.loginGoogle}
+      <style jsx>{`
+        .gg {
+          width: 100%;
+          border: 1px solid #ffffff28;
+          padding: 0.9rem 1.2rem;
+          font: inherit;
+          font-size: 1.05rem;
+          cursor: pointer;
+          color: #f2efe8;
+          background: #1a1f2a;
+          margin-top: 0.65rem;
+        }
+        .gg:hover {
+          background: #222836;
+        }
+      `}</style>
+    </button>
+  );
+}
+
 export function DevLoginForm() {
   const { t } = useI18n();
   return (

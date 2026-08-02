@@ -32,6 +32,7 @@ CREATE TABLE users (
   email           TEXT UNIQUE,
   wechat_openid   TEXT UNIQUE,
   wechat_unionid  TEXT,
+  google_sub      TEXT UNIQUE,
   name            TEXT,
   avatar_url      TEXT,
   role            TEXT NOT NULL DEFAULT 'user',
@@ -47,7 +48,7 @@ CREATE TABLE recharge_orders (
   amount_cents      BIGINT NOT NULL CHECK (amount_cents > 0),
   remark_code       TEXT NOT NULL UNIQUE,
   channel           TEXT NOT NULL DEFAULT 'wechat'
-                    CHECK (channel IN ('wechat', 'alipay')),
+                    CHECK (channel IN ('wechat', 'alipay', 'stripe')),
   status            TEXT NOT NULL DEFAULT 'pending_pay'
                     CHECK (status IN ('pending_pay', 'claimed', 'confirmed', 'expired', 'cancelled', 'rejected')),
   expires_at        TIMESTAMPTZ NOT NULL,
@@ -56,6 +57,7 @@ CREATE TABLE recharge_orders (
   confirmed_by      UUID REFERENCES users (id),
   rejected_at       TIMESTAMPTZ,
   reject_reason     TEXT,
+  stripe_session_id TEXT,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );

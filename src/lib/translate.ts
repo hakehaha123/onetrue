@@ -155,14 +155,16 @@ export async function translateZhToEnIfNeeded(text: string): Promise<TranslateRe
     const out = await translateWithDeeplx(trimmed);
     return { text: out, translated: true, skipped: false, provider: 'deeplx' };
   } catch (deeplxErr) {
+    const detail = deeplxErr instanceof Error ? deeplxErr.message : String(deeplxErr);
+    console.warn('[translate] DeepLX failed:', detail);
     if (!allowFallback) throw deeplxErr;
     try {
       const out = await translateWithMyMemory(trimmed);
+      console.warn('[translate] fell back to MyMemory (set TRANSLATE_FALLBACK=false to disable)');
       return { text: out, translated: true, skipped: false, provider: 'mymemory' };
     } catch (fallbackErr) {
-      const a = deeplxErr instanceof Error ? deeplxErr.message : String(deeplxErr);
       const b = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
-      throw new Error(`${a}；备用翻译也失败：${b}`);
+      throw new Error(`${detail}；备用翻译也失败：${b}`);
     }
   }
 }

@@ -45,7 +45,7 @@ export async function creditWallet(input: {
       ${JSON.stringify({
         package_id: input.packageId,
         note: input.note ?? 'recharge',
-        mode: 'manual_qr',
+        mode: input.note?.startsWith('stripe_') ? 'stripe' : 'manual_qr',
       })}
     )
     ON CONFLICT (provider_ref, type) DO NOTHING

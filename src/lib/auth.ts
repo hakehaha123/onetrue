@@ -1,5 +1,6 @@
 import NextAuth from 'next-auth';
 import Credentials from 'next-auth/providers/credentials';
+import Google from 'next-auth/providers/google';
 import type { OAuthConfig, Provider } from 'next-auth/providers';
 import { getSql } from '@/lib/db';
 
@@ -37,6 +38,15 @@ function adminOpenIds(): Set<string> {
     (process.env.ADMIN_WECHAT_OPENIDS ?? '')
       .split(',')
       .map((s) => s.trim())
+      .filter(Boolean),
+  );
+}
+
+function adminGoogleEmails(): Set<string> {
+  return new Set(
+    (process.env.ADMIN_GOOGLE_EMAILS ?? '')
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
       .filter(Boolean),
   );
 }
@@ -84,6 +94,70 @@ export async function upsertWechatUser(input: {
       ${role},
       0,
       NULL
+    )
+    RETURNING id, email, name, avatar_url, role, balance_cents, wechat_openid
+  `;
+  return rows[0] as AppUser;
+}
+
+/** Google / email login — one user row ↔ one credits balance. */
+export async function upsertGoogleUser(input: {
+  email: string;
+  googleSub?: string | null;
+  name?: string | null;
+  avatarUrl?: string | null;
+}): Promise<AppUser> {
+  const db = getSql();
+  const email = input.email.trim().toLowerCase();
+  if (!email) throw new Error('email required');
+  const role = adminGoogleEmails().has(email) ? 'admin' : 'user';
+
+  const bySub = input.googleSub
+    ? await db`
+        SELECT id, email, name, avatar_url, role, balance_cents, wechat_openid
+        FROM users WHERE google_sub = ${input.googleSub} LIMIT 1
+      `
+    : [];
+  if (bySub[0]) {
+    const rows = await db`
+      UPDATE users SET
+        email = COALESCE(email, ${email}),
+        name = COALESCE(${input.name ?? null}, name),
+        avatar_url = COALESCE(${input.avatarUrl ?? null}, avatar_url),
+        role = CASE WHEN ${role} = 'admin' THEN 'admin' ELSE role END
+      WHERE google_sub = ${input.googleSub!}
+      RETURNING id, email, name, avatar_url, role, balance_cents, wechat_openid
+    `;
+    return rows[0] as AppUser;
+  }
+
+  const byEmail = await db`
+    SELECT id, email, name, avatar_url, role, balance_cents, wechat_openid
+    FROM users WHERE lower(email) = ${email} LIMIT 1
+  `;
+  if (byEmail[0]) {
+    const id = (byEmail[0] as AppUser).id;
+    const rows = await db`
+      UPDATE users SET
+        google_sub = COALESCE(google_sub, ${input.googleSub ?? null}),
+        name = COALESCE(${input.name ?? null}, name),
+        avatar_url = COALESCE(${input.avatarUrl ?? null}, avatar_url),
+        role = CASE WHEN ${role} = 'admin' THEN 'admin' ELSE role END
+      WHERE id = ${id}
+      RETURNING id, email, name, avatar_url, role, balance_cents, wechat_openid
+    `;
+    return rows[0] as AppUser;
+  }
+
+  const rows = await db`
+    INSERT INTO users (email, google_sub, name, avatar_url, role, balance_cents)
+    VALUES (
+      ${email},
+      ${input.googleSub ?? null},
+      ${input.name ?? null},
+      ${input.avatarUrl ?? null},
+      ${role},
+      0
     )
     RETURNING id, email, name, avatar_url, role, balance_cents, wechat_openid
   `;
@@ -192,6 +266,15 @@ if (process.env.WECHAT_OPEN_APP_ID && process.env.WECHAT_OPEN_APP_SECRET) {
   providers.push(WeChatProvider());
 }
 
+if (process.env.AUTH_GOOGLE_ID && process.env.AUTH_GOOGLE_SECRET) {
+  providers.push(
+    Google({
+      clientId: process.env.AUTH_GOOGLE_ID,
+      clientSecret: process.env.AUTH_GOOGLE_SECRET,
+    }),
+  );
+}
+
 if (process.env.AUTH_DEV_PASSWORD) {
   providers.push(
     Credentials({
@@ -249,6 +332,19 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           unionid: p?.unionid ?? null,
           name: p?.nickname ?? user.name ?? null,
           avatarUrl: p?.headimgurl ?? user.image ?? null,
+        });
+        user.id = dbUser.id;
+        (user as { role?: string }).role = dbUser.role;
+        return true;
+      }
+      if (account?.provider === 'google') {
+        const email = user.email?.trim();
+        if (!email) return false;
+        const dbUser = await upsertGoogleUser({
+          email,
+          googleSub: account.providerAccountId ?? null,
+          name: user.name ?? null,
+          avatarUrl: user.image ?? null,
         });
         user.id = dbUser.id;
         (user as { role?: string }).role = dbUser.role;

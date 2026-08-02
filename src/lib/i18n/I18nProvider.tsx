@@ -21,18 +21,39 @@ type I18nValue = {
 
 const I18nContext = createContext<I18nValue | null>(null);
 
+/** Chinese (zh / zh-CN / zh-TW / zh-HK …) → zh; everything else → en */
+export function detectBrowserLocale(): Locale {
+  if (typeof navigator === 'undefined') return 'en';
+  const tags = [
+    ...(navigator.languages?.length ? navigator.languages : []),
+    navigator.language,
+  ].filter(Boolean) as string[];
+  for (const tag of tags) {
+    const primary = tag.toLowerCase().split('-')[0];
+    if (primary === 'zh') return 'zh';
+  }
+  return 'en';
+}
+
+function applyHtmlLang(l: Locale) {
+  document.documentElement.lang = l === 'zh' ? 'zh-CN' : 'en';
+}
+
 export function I18nProvider({ children }: { children: ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>('zh');
+  // Start with en to avoid wrong flash for non-Chinese users; hydrate from storage/browser.
+  const [locale, setLocaleState] = useState<Locale>('en');
 
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (isLocale(saved)) setLocaleState(saved);
+    const next = isLocale(saved) ? saved : detectBrowserLocale();
+    setLocaleState(next);
+    applyHtmlLang(next);
   }, []);
 
   const setLocale = useCallback((l: Locale) => {
     setLocaleState(l);
     localStorage.setItem(STORAGE_KEY, l);
-    document.documentElement.lang = l === 'zh' ? 'zh-CN' : 'en';
+    applyHtmlLang(l);
   }, []);
 
   const value = useMemo(
