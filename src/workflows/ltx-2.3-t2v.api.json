@@ -566,7 +566,7 @@
         0
       ],
       "resize_type": "scale longer dimension",
-      "largest_side": 1536,
+      "longer_size": 1536,
       "scale_method": "lanczos"
     },
     "_meta": {
