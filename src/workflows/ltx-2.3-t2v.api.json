@@ -566,7 +566,8 @@
         0
       ],
       "resize_type": "scale longer dimension",
-      "largest_side": 1536
+      "largest_side": 1536,
+      "scale_method": "lanczos"
     },
     "_meta": {
       "title": "ResizeImageMaskNode"
@@ -583,12 +584,10 @@
         "4845",
         0
       ],
-      "horizontal": 2,
-      "vertical": 2,
-      "frames": 6,
-      "cpu_vae": false,
-      "temporal_mode": "auto",
-      "spatial_mode": "auto"
+      "horizontal_tiles": 2,
+      "vertical_tiles": 2,
+      "overlap": 1,
+      "last_frame_fix": false
     },
     "_meta": {
       "title": "LTXVTiledVAEDecode"
@@ -605,12 +604,10 @@
         "4824",
         0
       ],
-      "horizontal": 2,
-      "vertical": 2,
-      "frames": 6,
-      "cpu_vae": false,
-      "temporal_mode": "auto",
-      "spatial_mode": "auto"
+      "horizontal_tiles": 2,
+      "vertical_tiles": 2,
+      "overlap": 1,
+      "last_frame_fix": false
     },
     "_meta": {
       "title": "LTXVTiledVAEDecode"
