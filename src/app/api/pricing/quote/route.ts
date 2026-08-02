@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { quoteFluxTxt2Img, quoteForTemplate, type BillingPath, type GpuTier } from '@/lib/quote';
+import {
+  quoteFluxTxt2Img,
+  quoteForTemplate,
+  quoteLtxTxt2Vid,
+  type BillingPath,
+  type GpuTier,
+} from '@/lib/quote';
 import { getTemplateBySlug } from '@/lib/db';
 import { pointsToCny } from '@/lib/credits';
 
@@ -25,6 +31,30 @@ export async function GET(req: NextRequest) {
         price_cents: q.priceCents,
         multiplier: Number(process.env.PRICE_MULTIPLIER ?? 2),
         note: '预付积分；含×倍数与预留支付手续费缓冲，开发期不走易支付',
+      });
+    }
+
+    if (kind === 'ltx' || kind === 'video') {
+      const frames = Number(sp.get('frames') || 0) || undefined;
+      const fps = Number(sp.get('fps') || 0) || undefined;
+      const width = Number(sp.get('width') || 0) || undefined;
+      const height = Number(sp.get('height') || 0) || undefined;
+      const q = quoteLtxTxt2Vid({ billingPath, gpuTier, frames, fps, width, height });
+      return NextResponse.json({
+        kind: 'ltx_txt2vid',
+        gpu_tier: q.gpuTier,
+        endpoint_key: q.endpointKey,
+        rate_usd_hr: q.rateUsdHr,
+        t_bill_est_sec: q.tBillEstSec,
+        duration_sec: q.durationSec,
+        frames: q.frames,
+        fps: q.fps,
+        cost_gpu_usd: q.cGpuUsd,
+        points: q.points,
+        cny: pointsToCny(q.points),
+        price_cents: q.priceCents,
+        multiplier: Number(process.env.PRICE_MULTIPLIER ?? 2),
+        note: 'LTX 有声短视频；时长/分辨率/GPU 档会影响积分与估时',
       });
     }
 

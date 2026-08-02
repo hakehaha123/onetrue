@@ -5,6 +5,8 @@ export type RunpodJobStatus = {
   executionTime?: number;
   output?: Record<string, unknown> & {
     images?: Array<string | { data?: string; url?: string; type?: string }>;
+    videos?: Array<string | { data?: string; url?: string; type?: string; filename?: string }>;
+    files?: Array<string | { data?: string; url?: string; type?: string; filename?: string }>;
     message?: string;
     type?: string;
     value?: number;
@@ -77,6 +79,29 @@ export async function getJobStatus(endpointKey: string, jobId: string): Promise<
   return (await res.json()) as RunpodJobStatus;
 }
 
+function asMediaUrl(
+  item: string | { data?: string; url?: string; filename?: string } | undefined,
+  fallbackMime: string,
+): string | null {
+  if (!item) return null;
+  if (typeof item === 'string') {
+    if (item.startsWith('http') || item.startsWith('data:')) return item;
+    return `data:${fallbackMime};base64,${item}`;
+  }
+  if (item.url) return item.url;
+  if (item.data) {
+    if (item.data.startsWith('data:')) return item.data;
+    const name = (item.filename || '').toLowerCase();
+    const mime = name.endsWith('.webm')
+      ? 'video/webm'
+      : name.endsWith('.gif')
+        ? 'image/gif'
+        : fallbackMime;
+    return `data:${mime};base64,${item.data}`;
+  }
+  return null;
+}
+
 /** Extract first image as data URL or remote URL from worker output */
 export function extractOutputImage(status: RunpodJobStatus): string | null {
   const out = status.output as Record<string, unknown> | undefined;
@@ -84,16 +109,7 @@ export function extractOutputImage(status: RunpodJobStatus): string | null {
 
   const images = out.images;
   if (Array.isArray(images) && images.length) {
-    const first = images[0] as string | { data?: string; url?: string };
-    if (typeof first === 'string') {
-      if (first.startsWith('http') || first.startsWith('data:')) return first;
-      return `data:image/png;base64,${first}`;
-    }
-    if (first.url) return first.url;
-    if (first.data) {
-      if (first.data.startsWith('data:')) return first.data;
-      return `data:image/png;base64,${first.data}`;
-    }
+    return asMediaUrl(images[0] as string | { data?: string; url?: string }, 'image/png');
   }
 
   // some workers nest under output.result / output.image
@@ -102,6 +118,53 @@ export function extractOutputImage(status: RunpodJobStatus): string | null {
     if (typeof v === 'string' && v.length > 32) {
       if (v.startsWith('http') || v.startsWith('data:')) return v;
       return `data:image/png;base64,${v}`;
+    }
+  }
+  return null;
+}
+
+/** Extract first video (mp4/webm) from worker-comfyui output */
+export function extractOutputVideo(status: RunpodJobStatus): string | null {
+  const out = status.output as Record<string, unknown> | undefined;
+  if (!out) return null;
+
+  for (const key of ['videos', 'files', 'images'] as const) {
+    const arr = out[key];
+    if (!Array.isArray(arr) || !arr.length) continue;
+    for (const item of arr) {
+      if (typeof item === 'string') {
+        const lower = item.slice(0, 40).toLowerCase();
+        if (
+          item.startsWith('data:video') ||
+          lower.includes('video') ||
+          item.endsWith('.mp4') ||
+          item.endsWith('.webm')
+        ) {
+          return asMediaUrl(item, 'video/mp4');
+        }
+        // images array sometimes carries mp4 base64 without prefix
+        if (key === 'videos') return asMediaUrl(item, 'video/mp4');
+      } else if (item && typeof item === 'object') {
+        const rec = item as { data?: string; url?: string; type?: string; filename?: string };
+        const name = `${rec.filename || ''} ${rec.type || ''} ${rec.url || ''}`.toLowerCase();
+        if (
+          key === 'videos' ||
+          name.includes('.mp4') ||
+          name.includes('.webm') ||
+          name.includes('video')
+        ) {
+          const url = asMediaUrl(rec, 'video/mp4');
+          if (url) return url;
+        }
+      }
+    }
+  }
+
+  for (const key of ['video', 'result', 'url'] as const) {
+    const v = out[key];
+    if (typeof v === 'string' && v.length > 32) {
+      if (v.startsWith('http') || v.startsWith('data:video')) return v;
+      if (key === 'video') return `data:video/mp4;base64,${v}`;
     }
   }
   return null;

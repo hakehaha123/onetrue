@@ -15,7 +15,7 @@
    - Idle Timeout: 120～300s（便于热复用已下载模型）
    - Flash Boot: 开
    - **不挂** Network Volume
-   - Container Disk: **100GB**（LTX-2.3 四套权重约 64GB，需留余量）
+   - Container Disk: **200GB**（权重约 61GB；冷启动下载峰值 + 镜像层，100GB 容易在最后几个 GB 报 `Not enough free disk space`）
    - GPU: 24GB 起（`video_24`）；完整 Gemma BF16 更吃显存，不够用 48GB（`video_48`）
    - Environment Variables：
      - `HF_TOKEN` = 你的 Hugging Face token（**只配在 RunPod 控制台，不要写进 Dockerfile/脚本**）
@@ -23,6 +23,7 @@
 6. 部署完成后把 Endpoint ID 写入应用环境变量：
    - `RUNPOD_ENDPOINT_VIDEO_24=...`
    - 可选 `RUNPOD_ENDPOINT_VIDEO_48=...`
+7. 前端页面：`/video`（文生视频），API：`POST /api/generate/txt2vid`，工作流：`workflows/ltx-2.3-t2v.api.json`（由官方 Single Stage Distilled Full 转换）。
 
 本地也可先构建再推 Docker Hub，再在 Template 里填镜像名：
 

@@ -130,3 +130,78 @@ export function quoteFluxTxt2Img(input?: {
   });
   return { ...breakdown, tBillEstSec, rateUsdHr: breakdown.rateUsdHr, gpuTier };
 }
+
+/** Align to LTX 8n+1 frame rule */
+export function ltxAlignFrames(frames: number): number {
+  const x = Math.max(9, Math.min(241, Math.round(frames)));
+  return Math.floor((x - 1) / 8) * 8 + 1;
+}
+
+/**
+ * Standalone quote for LTX txt2vid (single-stage distilled).
+ * Scales ETA / price by duration, fps, resolution, and GPU tier.
+ */
+export function quoteLtxTxt2Vid(input?: {
+  billingPath?: BillingPath;
+  gpuTier?: GpuTier;
+  frames?: number;
+  fps?: number;
+  width?: number;
+  height?: number;
+}): PricingBreakdown & {
+  tBillEstSec: number;
+  rateUsdHr: number;
+  gpuTier: GpuTier;
+  endpointKey: string;
+  durationSec: number;
+  frames: number;
+  fps: number;
+} {
+  const gpuTier = input?.gpuTier ?? '24gb';
+  const path = input?.billingPath ?? 'cold';
+  const fps = Math.min(30, Math.max(8, Math.round(input?.fps ?? 24)));
+  const frames = ltxAlignFrames(input?.frames ?? fps * 5 + 1);
+  const width = input?.width ?? 960;
+  const height = input?.height ?? 544;
+  const durationSec = frames / fps;
+
+  // Baseline: 121 frames @ 960×544 ≈ 5s @ 24fps
+  const baseFrames = 121;
+  const basePixels = 960 * 544;
+  const pixels = Math.max(1, width * height);
+  const frameScale = frames / baseFrames;
+  const pixelScale = Math.sqrt(pixels / basePixels);
+
+  const inferHot = Math.round(numEnv('PRICE_LTX_HOT_SEC', 180) * frameScale * pixelScale);
+  const coldOverhead = numEnv('PRICE_LTX_COLD_OVERHEAD_SEC', 420); // download + boot
+  const tBillEstSec = path === 'hot' ? Math.max(60, inferHot) : coldOverhead + Math.max(60, inferHot);
+
+  const rGpuUsdPerSec = gpuUsdPerSecForTier(gpuTier);
+  // Floor scales with duration; 48GB uses a higher floor so UI price differs from 24GB
+  const minBase =
+    gpuTier === '48gb'
+      ? numEnv('PRICE_MIN_CENTS_LTX_48', 1490)
+      : numEnv('PRICE_MIN_CENTS_LTX', 990);
+  const minPriceCents = Math.max(minBase, Math.round(minBase * (durationSec / 5)));
+
+  const breakdown = computePriceCny({
+    rGpuUsdPerSec,
+    tBillEstSec,
+    fxCnyPerUsd: numEnv('PRICE_FX_CNY_PER_USD', 7.2),
+    epayRate: numEnv('EPAY_RATE', 0.025),
+    epayFixedCny: 0,
+    multiplier: numEnv('PRICE_MULTIPLIER', 2),
+    minPriceCents,
+  });
+  const endpointKey = gpuTier === '48gb' ? 'video_48' : 'video_24';
+  return {
+    ...breakdown,
+    tBillEstSec,
+    rateUsdHr: breakdown.rateUsdHr,
+    gpuTier,
+    endpointKey,
+    durationSec,
+    frames,
+    fps,
+  };
+}
