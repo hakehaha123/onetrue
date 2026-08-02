@@ -18,6 +18,14 @@ const SIZES = [
 
 const JOB_SCOPE = 'flux-txt2img';
 
+function formatElapsed(sec: number): string {
+  const s = Math.max(0, Math.floor(sec));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  if (m <= 0) return `${r}s`;
+  return `${m}m ${String(r).padStart(2, '0')}s`;
+}
+
 export function Txt2ImgStudio() {
   const { t } = useI18n();
   const [prompt, setPrompt] = useState('时尚杂志大片，丝质连衣裙走秀，柔和日光，85mm，电影感色彩');
@@ -40,6 +48,7 @@ export function Txt2ImgStudio() {
   const [progressPct, setProgressPct] = useState(0);
   const [progressExact, setProgressExact] = useState(false);
   const [progressLabel, setProgressLabel] = useState('');
+  const [elapsedSec, setElapsedSec] = useState(0);
   const [pending, startTransition] = useTransition();
   const startedAtRef = useRef<number>(0);
   const etaSecRef = useRef<number>(120);
@@ -122,6 +131,17 @@ export function Txt2ImgStudio() {
   }, [etaSec]);
 
   useEffect(() => {
+    if (state !== 'submitting' && state !== 'running') return;
+    const tick = () => {
+      const start = startedAtRef.current || Date.now();
+      setElapsedSec(Math.max(0, (Date.now() - start) / 1000));
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [state]);
+
+  useEffect(() => {
     const saved = resumeFromStorage();
     if (!saved) return;
     setJobId(saved.jobId);
@@ -129,6 +149,7 @@ export function Txt2ImgStudio() {
     startedAtRef.current = saved.startedAt;
     etaSecRef.current = saved.etaSec || 120;
     setEtaSec(saved.etaSec || 120);
+    setElapsedSec(Math.max(0, (Date.now() - saved.startedAt) / 1000));
     setState('running');
     setStatusText('…');
     setProgressPct(12);
@@ -170,6 +191,8 @@ export function Txt2ImgStudio() {
     setProgressPct(3);
     setProgressExact(false);
     setProgressLabel(t.progressSubmit);
+    setElapsedSec(0);
+    startedAtRef.current = Date.now();
     setState('submitting');
     setStatusText('…');
     const size = SIZES[sizeIdx];
@@ -282,8 +305,12 @@ export function Txt2ImgStudio() {
                   exact={progressExact}
                   label={progressLabel || t.generating}
                 />
+                {busy && <p className="eta-hint">已用时 {formatElapsed(elapsedSec)}</p>}
               </div>
             </div>
+          )}
+          {(state === 'done' || state === 'error') && elapsedSec > 0 && (
+            <p className="eta-hint elapsed-final">本次任务用时 {formatElapsed(elapsedSec)}</p>
           )}
         </div>
 
@@ -520,6 +547,16 @@ export function Txt2ImgStudio() {
         }
         .placeholder.pulse > .ph-inner > span {
           animation: pulse 1.4s ease-in-out infinite;
+        }
+        .eta-hint {
+          margin: 0;
+          font-size: 0.8rem;
+          color: #8fa8b8;
+        }
+        .elapsed-final {
+          margin: 0.5rem 0 0;
+          text-align: center;
+          color: #c4b8a8;
         }
         .panel {
           display: flex;

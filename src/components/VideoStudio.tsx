@@ -20,6 +20,9 @@ const DURATIONS = [5, 8, 10] as const;
 const FPS_OPTIONS = [16, 24] as const;
 const JOB_SCOPE = 'ltx-txt2vid';
 
+const DEFAULT_VIDEO_PROMPT =
+  'Cinematic close-up shot of a breathtakingly beautiful female angel with soft luminous skin, glowing golden-white wings, and a serene smile. She wears a delicate ethereal white gown with golden embroidery, floating gently above soft clouds in golden hour sunlight. She looks directly into the camera, warmly waving her hand and speaking friendly greetings in a clear, sweet tone. Cinematic lighting, photorealistic, 8k resolution, ultra-detailed features, smooth animation.';
+
 /** LTX frame rule 8n+1 */
 function framesFor(durationSec: number, fps: number): number {
   const raw = Math.round(durationSec * fps);
@@ -27,11 +30,17 @@ function framesFor(durationSec: number, fps: number): number {
   return Math.floor((x - 1) / 8) * 8 + 1;
 }
 
+function formatElapsed(sec: number): string {
+  const s = Math.max(0, Math.floor(sec));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  if (m <= 0) return `${r}s`;
+  return `${m}m ${String(r).padStart(2, '0')}s`;
+}
+
 export function VideoStudio() {
   const { t } = useI18n();
-  const [prompt, setPrompt] = useState(
-    '丝质连衣裙走秀，柔和侧光，缓慢转身，布料轻摆，电影感浅景深，同步环境声与脚步',
-  );
+  const [prompt, setPrompt] = useState(DEFAULT_VIDEO_PROMPT);
   const [promptEn, setPromptEn] = useState<string | null>(null);
   const [translating, setTranslating] = useState(false);
   const [resIdx, setResIdx] = useState(0);
@@ -56,6 +65,7 @@ export function VideoStudio() {
   const [progressPct, setProgressPct] = useState(0);
   const [progressExact, setProgressExact] = useState(false);
   const [progressLabel, setProgressLabel] = useState('');
+  const [elapsedSec, setElapsedSec] = useState(0);
   const [pending, startTransition] = useTransition();
   const startedAtRef = useRef<number>(0);
   const etaSecRef = useRef<number>(600);
@@ -157,6 +167,18 @@ export function VideoStudio() {
     if (etaSec != null && etaSec > 0) etaSecRef.current = etaSec;
   }, [etaSec]);
 
+  // Live wall-clock for billing / ETA comparison (keeps final value when done).
+  useEffect(() => {
+    if (state !== 'submitting' && state !== 'running') return;
+    const tick = () => {
+      const start = startedAtRef.current || Date.now();
+      setElapsedSec(Math.max(0, (Date.now() - start) / 1000));
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [state]);
+
   // Resume polling after refresh if a job was still running.
   useEffect(() => {
     const saved = resumeFromStorage();
@@ -167,6 +189,7 @@ export function VideoStudio() {
     startedAtRef.current = saved.startedAt;
     etaSecRef.current = saved.etaSec || 600;
     setEtaSec(saved.etaSec || 600);
+    setElapsedSec(Math.max(0, (Date.now() - saved.startedAt) / 1000));
     setState('running');
     setStatusText('…');
     setProgressPct(12);
@@ -207,6 +230,8 @@ export function VideoStudio() {
     setProgressPct(3);
     setProgressExact(false);
     setProgressLabel(t.progressSubmit);
+    setElapsedSec(0);
+    startedAtRef.current = Date.now();
     setState('submitting');
     setStatusText('…');
 
@@ -335,13 +360,17 @@ export function VideoStudio() {
                   exact={progressExact}
                   label={progressLabel || t.generating}
                 />
-                {busy && etaMin != null && (
+                {busy && (
                   <p className="eta-hint">
-                    {t.videoEtaHint.replace('{min}', String(etaMin))}
+                    已用时 {formatElapsed(elapsedSec)}
+                    {etaMin != null ? ` · ${t.videoEtaHint.replace('{min}', String(etaMin))}` : ''}
                   </p>
                 )}
               </div>
             </div>
+          )}
+          {(state === 'done' || state === 'error') && elapsedSec > 0 && (
+            <p className="eta-hint elapsed-final">本次任务用时 {formatElapsed(elapsedSec)}</p>
           )}
         </div>
 
@@ -636,6 +665,11 @@ export function VideoStudio() {
           margin: 0;
           font-size: 0.8rem;
           color: #8fa8b8;
+        }
+        .elapsed-final {
+          margin: 0.5rem 0 0;
+          text-align: center;
+          color: #c4b8a8;
         }
         @keyframes pulse {
           0%,
